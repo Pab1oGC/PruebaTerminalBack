@@ -1,0 +1,479 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+
+// ─────────────────────────────────────────
+// NIVEL PLATAFORMA
+// ─────────────────────────────────────────
+
+model PlatformAdmin {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique @db.VarChar(64)
+  passwordHash String   @db.VarChar(255)
+  nombre       String   @db.VarChar(128)
+  email        String   @unique @db.VarChar(255)
+  activo       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("platform_admins")
+}
+
+enum TenantStatus {
+  Active
+  Suspended
+  Archived
+}
+
+model Tenant {
+  id               Int          @id @default(autoincrement())
+  codigo           String       @unique @db.VarChar(64)
+  nombre           String       @db.VarChar(128)
+  emailContacto    String       @db.VarChar(255)
+  telefonoContacto String?      @db.VarChar(20)
+  estado           TenantStatus @default(Active)
+  fechaCompra      DateTime?
+  fechaSuspension  DateTime?
+  fechaArchivado   DateTime?
+  notasAdmin       String?      @db.Text
+  require2fa       Boolean      @default(false)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  branches      Branch[]
+  users         User[]
+  routes        Route[]
+  buses         Bus[]
+  seatTemplates SeatTemplate[]
+  drivers       Driver[]
+  helpers       Helper[]
+  schedules     Schedule[]
+  tickets       Ticket[]
+  parcels       Parcel[]
+  cashSessions  CashSession[]
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+  loginAttempts LoginAttempt[]
+
+  @@map("tenants")
+}
+
+// ─────────────────────────────────────────
+// SEGURIDAD
+// ─────────────────────────────────────────
+
+model RefreshToken {
+  id         BigInt    @id @default(autoincrement())
+  tenantId   Int
+  userId     Int
+  tokenHash  String    @unique @db.Char(64)
+  ipAddress  String    @db.VarChar(45)
+  userAgent  String    @db.Text
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([userId, revokedAt])
+  @@map("refresh_tokens")
+}
+
+model LoginAttempt {
+  id            BigInt   @id @default(autoincrement())
+  tenantId      Int?
+  codigoEmpresa String   @db.VarChar(64)
+  username      String   @db.VarChar(64)
+  ipAddress     String   @db.VarChar(45)
+  userAgent     String   @db.Text
+  exitoso       Boolean
+  createdAt     DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([codigoEmpresa, username, createdAt])
+  @@index([ipAddress, createdAt])
+  @@map("login_attempts")
+}
+
+model PasswordResetToken {
+  id        BigInt    @id @default(autoincrement())
+  tenantId  Int
+  userId    Int
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  ipAddress String    @db.VarChar(45)
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ─────────────────────────────────────────
+// USUARIOS Y SUCURSALES
+// ─────────────────────────────────────────
+
+enum UserRole {
+  admin
+  supervisor
+  boletero
+  chofer
+}
+
+enum UserStatus {
+  Activo
+  Inactivo
+  Suspendido
+}
+
+model Branch {
+  id       Int     @id @default(autoincrement())
+  tenantId Int
+  nombre   String  @db.VarChar(128)
+  ciudad   String  @db.VarChar(128)
+  activo   Boolean @default(true)
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  users        User[]
+  routes       Route[]
+  schedules    Schedule[]
+  cashSessions CashSession[]
+
+  @@unique([tenantId, nombre])
+  @@map("branches")
+}
+
+model User {
+  id                  Int        @id @default(autoincrement())
+  tenantId            Int
+  email               String     @db.VarChar(255)
+  passwordHash        String     @db.VarChar(255)
+  nombre              String     @db.VarChar(128)
+  rol                 UserRole
+  branchId            Int?
+  estado              UserStatus @default(Activo)
+  failedLoginAttempts Int        @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  lastLoginIp         String?    @db.VarChar(45)
+  passwordChangedAt   DateTime   @default(now())
+  mustChangePassword  Boolean    @default(false)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  tenant              Tenant               @relation(fields: [tenantId], references: [id])
+  branch              Branch?              @relation(fields: [branchId], references: [id])
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  ticketsSold         Ticket[]             @relation("TicketSoldBy")
+  parcelsSold         Parcel[]             @relation("ParcelRegisteredBy")
+  cashSessions        CashSession[]
+  auditLogs           AuditLog[]
+  schedulesCreated    Schedule[]           @relation("ScheduleCreatedBy")
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────
+// FLOTAS
+// ─────────────────────────────────────────
+
+model SeatTemplate {
+  id             Int    @id @default(autoincrement())
+  tenantId       Int
+  nombre         String @db.VarChar(128)
+  config         String @db.VarChar(8)
+  pisos          Int    @default(1)
+  layout         Json
+  capacidadTotal Int
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  buses  Bus[]
+
+  @@map("seat_templates")
+}
+
+model Bus {
+  id             Int     @id @default(autoincrement())
+  tenantId       Int
+  placa          String  @db.VarChar(20)
+  marca          String? @db.VarChar(64)
+  modelo         String? @db.VarChar(64)
+  anio           Int?
+  seatTemplateId Int
+  activo         Boolean @default(true)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  seatTemplate SeatTemplate @relation(fields: [seatTemplateId], references: [id])
+  schedules    Schedule[]
+
+  @@unique([tenantId, placa])
+  @@map("buses")
+}
+
+// ─────────────────────────────────────────
+// PERSONAL
+// ─────────────────────────────────────────
+
+model Driver {
+  id            Int       @id @default(autoincrement())
+  tenantId      Int
+  nombre        String    @db.VarChar(128)
+  rut           String    @db.VarChar(20)
+  telefono      String?   @db.VarChar(20)
+  licenciaVence DateTime?
+  activo        Boolean   @default(true)
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  schedules Schedule[]
+
+  @@unique([tenantId, rut])
+  @@map("drivers")
+}
+
+model Helper {
+  id       Int     @id @default(autoincrement())
+  tenantId Int
+  nombre   String  @db.VarChar(128)
+  rut      String  @db.VarChar(20)
+  telefono String? @db.VarChar(20)
+  activo   Boolean @default(true)
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  schedules Schedule[]
+
+  @@unique([tenantId, rut])
+  @@map("helpers")
+}
+
+// ─────────────────────────────────────────
+// RUTAS
+// ─────────────────────────────────────────
+
+model Route {
+  id              Int     @id @default(autoincrement())
+  tenantId        Int
+  origenBranchId  Int
+  destino         String  @db.VarChar(128)
+  distanciaKm     Float?
+  precioMaximoAtt Float
+  precioSugerido  Float
+  activo          Boolean @default(true)
+
+  tenant       Tenant     @relation(fields: [tenantId], references: [id])
+  origenBranch Branch     @relation(fields: [origenBranchId], references: [id])
+  schedules    Schedule[]
+
+  @@unique([tenantId, origenBranchId, destino])
+  @@map("routes")
+}
+
+// ─────────────────────────────────────────
+// HABILITACIONES
+// ─────────────────────────────────────────
+
+enum ScheduleStatus {
+  Programada
+  Habilitada
+  EnCurso
+  Finalizada
+  Cancelada
+}
+
+model Schedule {
+  id                  Int            @id @default(autoincrement())
+  tenantId            Int
+  busId               Int
+  routeId             Int
+  branchId            Int
+  driverId            Int
+  helperId            Int?
+  salidaAt            DateTime
+  llegadaEstimadaAt   DateTime?
+  estado              ScheduleStatus @default(Programada)
+  createdBy           Int?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  bus      Bus      @relation(fields: [busId], references: [id])
+  route    Route    @relation(fields: [routeId], references: [id])
+  branch   Branch   @relation(fields: [branchId], references: [id])
+  driver   Driver   @relation(fields: [driverId], references: [id])
+  helper   Helper?  @relation(fields: [helperId], references: [id])
+  creator  User?    @relation("ScheduleCreatedBy", fields: [createdBy], references: [id])
+  tickets  Ticket[]
+  parcels  Parcel[]
+
+  @@index([tenantId, estado, salidaAt])
+  @@map("schedules")
+}
+
+// ─────────────────────────────────────────
+// BOLETOS
+// ─────────────────────────────────────────
+
+enum TicketStatus {
+  Vendido
+  Reservado
+}
+
+enum PaymentMethod {
+  Efectivo
+  Tarjeta
+  Transferencia
+}
+
+model Ticket {
+  id             Int           @id @default(autoincrement())
+  tenantId       Int
+  scheduleId     Int
+  asientoNumero  Int
+  pasajeroNombre String        @db.VarChar(128)
+  pasajeroRut    String        @db.VarChar(20)
+  precio         Float
+  metodoPago     PaymentMethod @default(Efectivo)
+  estado         TicketStatus  @default(Vendido)
+  vendidoPor     Int?
+  vendidoAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  schedule Schedule @relation(fields: [scheduleId], references: [id])
+  seller   User?    @relation("TicketSoldBy", fields: [vendidoPor], references: [id])
+
+  @@unique([tenantId, scheduleId, asientoNumero])
+  @@index([tenantId, scheduleId])
+  @@map("tickets")
+}
+
+// ─────────────────────────────────────────
+// ENCOMIENDAS
+// ─────────────────────────────────────────
+
+enum ParcelStatus {
+  Registrada
+  Embarcada
+  Entregada
+}
+
+model Parcel {
+  id                 Int          @id @default(autoincrement())
+  tenantId           Int
+  scheduleId         Int
+  remitenteNombre    String       @db.VarChar(128)
+  remitenteCi        String       @db.VarChar(20)
+  remitenteTel       String?      @db.VarChar(20)
+  destinatarioNombre String       @db.VarChar(128)
+  destinatarioCi     String       @db.VarChar(20)
+  destinatarioTel    String?      @db.VarChar(20)
+  descripcion        String       @db.Text
+  pesoKg             Float?
+  precio             Float
+  estado             ParcelStatus @default(Registrada)
+  registradoPor      Int?
+  registradoAt       DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  schedule  Schedule @relation(fields: [scheduleId], references: [id])
+  registrar User?    @relation("ParcelRegisteredBy", fields: [registradoPor], references: [id])
+
+  @@index([tenantId, scheduleId])
+  @@map("parcels")
+}
+
+// ─────────────────────────────────────────
+// CAJA
+// ─────────────────────────────────────────
+
+enum CashSessionStatus {
+  Abierta
+  Cerrada
+}
+
+enum MovementType {
+  Ingreso
+  Egreso
+}
+
+enum MovementOrigin {
+  Boleto
+  Encomienda
+  Manual
+}
+
+model CashSession {
+  id           Int               @id @default(autoincrement())
+  tenantId     Int
+  userId       Int
+  branchId     Int
+  abiertaAt    DateTime          @default(now())
+  saldoInicial Float
+  cerradaAt    DateTime?
+  saldoFinal   Float?
+  diferencia   Float?
+  estado       CashSessionStatus @default(Abierta)
+
+  tenant    Tenant         @relation(fields: [tenantId], references: [id])
+  user      User           @relation(fields: [userId], references: [id])
+  branch    Branch         @relation(fields: [branchId], references: [id])
+  movements CashMovement[]
+
+  @@index([tenantId, estado])
+  @@map("cash_sessions")
+}
+
+model CashMovement {
+  id        BigInt         @id @default(autoincrement())
+  tenantId  Int
+  sessionId Int
+  tipo      MovementType
+  origen    MovementOrigin
+  refId     Int?
+  monto     Float
+  concepto  String         @db.VarChar(255)
+  createdAt DateTime       @default(now())
+
+  session CashSession @relation(fields: [sessionId], references: [id])
+
+  @@index([tenantId, sessionId])
+  @@map("cash_movements")
+}
+
+// ─────────────────────────────────────────
+// AUDITORÍA (append-only)
+// ─────────────────────────────────────────
+
+model AuditLog {
+  id           BigInt   @id @default(autoincrement())
+  tenantId     Int
+  tenantCodigo String   @db.VarChar(64)
+  userId       Int?
+  accion       String   @db.VarChar(64)
+  entidad      String   @db.VarChar(64)
+  entidadId    Int?
+  before       Json?
+  after        Json?
+  ipAddress    String   @db.VarChar(45)
+  userAgent    String   @db.Text
+  createdAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, entidad, createdAt])
+  @@map("audit_logs")
+}
